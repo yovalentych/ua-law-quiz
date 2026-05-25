@@ -7,8 +7,10 @@
   --ua-blue-light: #3b82f6;
   --success: #16a34a;
   --success-bg: #dcfce7;
+  --success-text: #14532d;
   --error: #dc2626;
   --error-bg: #fee2e2;
+  --error-text: #7f1d1d;
   --bg: #f0f4f8;
   --card: #ffffff;
   --text: #1e293b;
@@ -21,7 +23,10 @@
   --transition: 0.2s ease;
 }
 
-html { font-size: 16px; }
+html {
+  font-size: 16px;
+  color-scheme: light dark;
+}
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
   background: var(--bg);
@@ -185,7 +190,7 @@ button:active { transform: scale(0.97); }
 }
 
 .stat-card {
-  background: white;
+  background: var(--card);
   border-radius: var(--radius-sm);
   padding: 14px 10px;
   text-align: center;
@@ -484,7 +489,7 @@ button:active { transform: scale(0.97); }
   padding: 16px;
   max-width: 700px;
   margin: 0 auto;
-  padding-bottom: 100px;
+  padding-bottom: calc(100px + env(safe-area-inset-bottom));
 }
 
 .question-card {
@@ -560,7 +565,7 @@ button:active { transform: scale(0.97); }
 .option-btn.correct {
   background: var(--success-bg);
   border-color: var(--success);
-  color: #14532d;
+  color: var(--success-text);
 }
 .option-btn.correct .option-letter {
   background: var(--success);
@@ -571,7 +576,7 @@ button:active { transform: scale(0.97); }
 .option-btn.wrong {
   background: var(--error-bg);
   border-color: var(--error);
-  color: #7f1d1d;
+  color: var(--error-text);
 }
 .option-btn.wrong .option-letter {
   background: var(--error);
@@ -582,7 +587,7 @@ button:active { transform: scale(0.97); }
 .option-btn.reveal-correct {
   background: var(--success-bg);
   border-color: var(--success);
-  color: #14532d;
+  color: var(--success-text);
 }
 .option-btn.reveal-correct .option-letter {
   background: var(--success);
@@ -602,13 +607,13 @@ button:active { transform: scale(0.97); }
 }
 .feedback-box.correct-fb {
   background: var(--success-bg);
-  color: #14532d;
-  border: 1px solid #bbf7d0;
+  color: var(--success-text);
+  border: 1px solid rgba(22,163,74,0.35);
 }
 .feedback-box.wrong-fb {
   background: var(--error-bg);
-  color: #7f1d1d;
-  border: 1px solid #fecaca;
+  color: var(--error-text);
+  border: 1px solid rgba(220,38,38,0.35);
 }
 .feedback-icon { font-size: 1.2rem; flex-shrink: 0; margin-top: 1px; }
 .feedback-text { flex: 1; }
@@ -618,9 +623,10 @@ button:active { transform: scale(0.97); }
   bottom: 0;
   left: 0;
   right: 0;
-  background: white;
+  background: var(--card);
   border-top: 1px solid var(--border);
   padding: 12px 16px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
   z-index: 20;
 }
 .quiz-nav-inner {
@@ -814,7 +820,7 @@ button:active { transform: scale(0.97); }
 }
 .study-option.correct-ans {
   background: var(--success-bg);
-  color: #14532d;
+  color: var(--success-text);
 }
 .study-option.other-ans {
   background: var(--bg);
@@ -842,7 +848,7 @@ button:active { transform: scale(0.97); }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 .modal-sheet {
-  background: white;
+  background: var(--card);
   border-radius: 20px 20px 0 0;
   width: 100%;
   max-width: 700px;
@@ -1012,20 +1018,22 @@ button:active { transform: scale(0.97); }
     --shadow: 0 2px 12px rgba(0,0,0,0.3);
     --shadow-lg: 0 8px 32px rgba(0,0,0,0.4);
     --success-bg: #14532d;
+    --success-text: #bbf7d0;
     --error-bg: #7f1d1d;
+    --error-text: #fecaca;
     --ua-blue-light: #60a5fa;
   }
   body { background: var(--bg); }
-  .study-option.other-ans { background: #0f172a; }
+  .study-option.other-ans { background: #0f172a; color: var(--text-muted); }
   .option-btn { background: var(--card); color: var(--text); }
   .option-letter { background: #0f172a; }
   .option-btn:hover:not(:disabled) { background: #1e3a5f; }
   .next-btn:disabled { background: #334155; color: var(--text-muted); }
-  .mode-option-btn { background: #0f172a; }
+  .mode-option-btn { background: #0f172a; border-color: var(--border); }
   .mode-option-btn:hover { background: #1e293b; border-color: var(--ua-blue); }
-  .scroll-tab { background: var(--card); }
-
-  /* Study toolbar overrides for dark mode */
-  .app-header ~ div[style*="background:white"],
-  div[style*="background:white;border-bottom"] { background: var(--card) !important; }
+  .mode-label { color: var(--text); }
+  .modal-title { color: var(--text); }
+  .scroll-tab { background: var(--card); color: var(--text-muted); }
+  .btn-secondary { background: var(--card); border-color: var(--ua-blue-light); color: var(--ua-blue-light); }
+  .btn-secondary:hover { background: #1e3a5f; }
 }

@@ -655,10 +655,10 @@ function renderResults() {
     const mistakesList = document.createElement('div');
     mistakesList.style.marginBottom = '20px';
     State.mistakes.slice(0, 10).forEach(m => {
-      const item = html(`<div style="background:white;border-radius:12px;padding:12px 14px;margin-bottom:8px;box-shadow:0 1px 6px rgba(0,0,0,0.07);text-align:left">
-        <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px;color:#1e293b">${m.q}</div>
-        <div style="font-size:0.78rem;color:#dc2626;margin-bottom:3px">❌ ${m.chosen}</div>
-        <div style="font-size:0.78rem;color:#16a34a">✅ ${m.correct}</div>
+      const item = html(`<div style="background:var(--card);border-radius:12px;padding:12px 14px;margin-bottom:8px;box-shadow:var(--shadow);text-align:left">
+        <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px;color:var(--text)">${m.q}</div>
+        <div style="font-size:0.78rem;color:var(--error-text);margin-bottom:3px">❌ ${m.chosen}</div>
+        <div style="font-size:0.78rem;color:var(--success)">✅ ${m.correct}</div>
       </div>`);
       mistakesList.appendChild(item);
     });
@@ -747,16 +747,16 @@ function renderStudy() {
   screen.appendChild(makeHeader('Режим вивчення', title, true));
 
   // Toolbar: view toggle + expand all (list mode only)
-  const toolbar = html(`<div style="background:white;border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+  const toolbar = html(`<div style="background:var(--card);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     <div style="display:flex;border:2px solid var(--border);border-radius:10px;overflow:hidden;flex-shrink:0">
-      <button id="btn-list-mode" style="padding:7px 14px;font-size:0.8rem;font-weight:600;transition:all 0.15s;display:flex;align-items:center;gap:6px;border:none;cursor:pointer;${!isCards ? 'background:var(--ua-blue);color:white' : 'background:white;color:var(--text-muted)'}">
+      <button id="btn-list-mode" style="padding:7px 14px;font-size:0.8rem;font-weight:600;transition:all 0.15s;display:flex;align-items:center;gap:6px;border:none;cursor:pointer;${!isCards ? 'background:var(--ua-blue);color:white' : 'background:transparent;color:var(--text-muted)'}">
         ${Icons.list} Список
       </button>
-      <button id="btn-card-mode" style="padding:7px 14px;font-size:0.8rem;font-weight:600;transition:all 0.15s;display:flex;align-items:center;gap:6px;border:none;cursor:pointer;${isCards ? 'background:var(--ua-blue);color:white' : 'background:white;color:var(--text-muted)'}">
+      <button id="btn-card-mode" style="padding:7px 14px;font-size:0.8rem;font-weight:600;transition:all 0.15s;display:flex;align-items:center;gap:6px;border:none;cursor:pointer;${isCards ? 'background:var(--ua-blue);color:white' : 'background:transparent;color:var(--text-muted)'}">
         ${Icons.play} Картки
       </button>
     </div>
-    ${!isCards ? `<button id="btn-expand-all" style="padding:7px 12px;font-size:0.8rem;font-weight:600;border:2px solid var(--border);border-radius:10px;background:white;color:var(--text);cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:6px">
+    ${!isCards ? `<button id="btn-expand-all" style="padding:7px 12px;font-size:0.8rem;font-weight:600;border:2px solid var(--border);border-radius:10px;background:var(--card);color:var(--text);cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:6px">
       ${State.studyAllExpanded ? Icons.chevronDown + ' Згорнути всі' : Icons.chevronDown + ' Розгорнути всі'}
     </button>` : `<span style="font-size:0.8rem;color:var(--text-muted)">${State.studyCardIdx + 1} / ${flat.length}</span>`}
   </div>`);
@@ -841,7 +841,7 @@ function renderStudyCardView(screen, subject, flat) {
   const pct = Math.round((idx / flat.length) * 100);
 
   // Progress bar
-  const progBar = html(`<div style="background:white;border-bottom:1px solid var(--border);padding:10px 16px">
+  const progBar = html(`<div style="background:var(--card);border-bottom:1px solid var(--border);padding:10px 16px">
     <div style="max-width:700px;margin:0 auto">
       <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-muted);margin-bottom:6px">
         <span>${q.sectionTitle}</span>
@@ -860,7 +860,7 @@ function renderStudyCardView(screen, subject, flat) {
   const cardWrap = html(`<div style="padding:16px;max-width:700px;margin:0 auto;padding-bottom:90px"></div>`);
 
   // Question card
-  const qCard = html(`<div style="background:white;border-radius:16px;padding:20px;margin-bottom:14px;box-shadow:0 2px 12px rgba(0,0,0,0.08)">
+  const qCard = html(`<div style="background:var(--card);border-radius:16px;padding:20px;margin-bottom:14px;box-shadow:var(--shadow)">
     <div style="display:inline-block;font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:3px 10px;border-radius:20px;color:white;background:${subject.color};margin-bottom:12px">${q.sectionTitle}</div>
     <div style="font-size:1.05rem;font-weight:600;line-height:1.5;color:var(--text)">${q.q}</div>
   </div>`);
@@ -873,8 +873,8 @@ function renderStudyCardView(screen, subject, flat) {
     const isCorrect = i === q.a;
     const optEl = html(`<div style="padding:14px 16px;border-radius:10px;display:flex;align-items:flex-start;gap:12px;font-size:0.95rem;line-height:1.4;
       ${isCorrect
-        ? 'background:var(--success-bg);border:2px solid var(--success);color:#14532d'
-        : 'background:white;border:2px solid var(--border);color:var(--text-muted)'}">
+        ? 'background:var(--success-bg);border:2px solid var(--success);color:var(--success-text)'
+        : 'background:var(--card);border:2px solid var(--border);color:var(--text-muted)'}">
       <span style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;flex-shrink:0;
         ${isCorrect ? 'background:var(--success);color:white;border:2px solid var(--success)' : 'background:var(--bg);border:2px solid var(--border);color:var(--text-muted)'}">${LETTERS[i]}</span>
       <span style="flex:1">${opt}</span>
@@ -888,7 +888,7 @@ function renderStudyCardView(screen, subject, flat) {
   screen.appendChild(scrollArea);
 
   // Fixed bottom nav
-  const nav = html(`<div style="position:fixed;bottom:0;left:0;right:0;background:white;border-top:1px solid var(--border);padding:12px 16px;z-index:20">
+  const nav = html(`<div style="position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);padding:12px 16px;padding-bottom:max(12px,env(safe-area-inset-bottom));z-index:20">
     <div style="max-width:700px;margin:0 auto;display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center">
       <button id="btn-prev" style="padding:14px;border-radius:10px;font-size:0.95rem;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;transition:all 0.2s;
         ${idx === 0 ? 'background:var(--border);color:var(--text-muted);cursor:default' : 'background:var(--bg);color:var(--text);border:2px solid var(--border)'}">
