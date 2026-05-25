@@ -18,46 +18,94 @@ const State = {
   studyAllExpanded: false,
 };
 
+/* ===== PROGRESS — localStorage schema v2 =====
+  {
+    v: 2,
+    secs: {
+      "0_0": { best: 90, last: 80, n: 3, ts: 1716000000000 },
+      "0_all": { ... }
+    },
+    hist: [{ ts, si, sc, s, t }],   // last 30 sessions
+    streak: { d: "2025-05-25", n: 3 }
+  }
+===== */
 function loadProgress() {
-  try { return JSON.parse(localStorage.getItem('quizProgress') || '{}'); }
-  catch { return {}; }
+  try {
+    const raw = JSON.parse(localStorage.getItem('quizProgress') || '{}');
+    if (raw.v === 2) return raw;
+    // Migrate from v1 (flat {completed,correct,total})
+    const p = { v: 2, secs: {}, hist: [], streak: { d: '', n: 0 } };
+    Object.entries(raw).forEach(([k, v]) => {
+      if (v && typeof v.correct === 'number' && v.total > 0) {
+        const pct = Math.round(v.correct / v.total * 100);
+        p.secs[k] = { best: pct, last: pct, n: v.completed || 1, ts: Date.now() };
+      }
+    });
+    return p;
+  } catch { return { v: 2, secs: {}, hist: [], streak: { d: '', n: 0 } }; }
 }
+
 function saveProgress() {
   localStorage.setItem('quizProgress', JSON.stringify(State.progress));
 }
 
-function getProgressKey(subjectIdx, sectionIdx) {
+function secKey(subjectIdx, sectionIdx) {
   return `${subjectIdx}_${sectionIdx === null ? 'all' : sectionIdx}`;
 }
 
 function getSectionProgress(subjectIdx, sectionIdx) {
-  const key = getProgressKey(subjectIdx, sectionIdx);
-  return State.progress[key] || { completed: 0, correct: 0, total: 0 };
+  return State.progress.secs?.[secKey(subjectIdx, sectionIdx)] || null;
 }
 
-function updateProgress(subjectIdx, sectionIdx, correct, total) {
-  const key = getProgressKey(subjectIdx, sectionIdx);
-  const existing = State.progress[key] || { completed: 0, correct: 0, total: 0 };
-  State.progress[key] = {
-    completed: existing.completed + 1,
-    correct: existing.correct + correct,
-    total: existing.total + total,
-  };
+function updateProgress(subjectIdx, sectionIdx, score, total) {
+  const p = State.progress;
+  if (!p.secs) p.secs = {};
+  if (!p.hist) p.hist = [];
+  if (!p.streak) p.streak = { d: '', n: 0 };
+
+  const pct = Math.round(score / total * 100);
+  const k = secKey(subjectIdx, sectionIdx);
+  const ex = p.secs[k];
+  p.secs[k] = { best: ex ? Math.max(ex.best, pct) : pct, last: pct, n: (ex?.n || 0) + 1, ts: Date.now() };
+
+  p.hist.unshift({ ts: Date.now(), si: subjectIdx, sc: sectionIdx, s: score, t: total });
+  if (p.hist.length > 30) p.hist.pop();
+
+  // Streak: count consecutive calendar days with at least one session
+  const today = new Date().toISOString().slice(0, 10);
+  if (p.streak.d === today) {
+    // already updated today
+  } else {
+    const yesterday = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+    p.streak = { d: today, n: p.streak.d === yesterday ? p.streak.n + 1 : 1 };
+  }
+
   saveProgress();
 }
 
 function getTotalProgress(subjectIdx) {
   const subject = QUIZ_DATA.subjects[subjectIdx];
-  let totalQ = 0, doneQ = 0, correctQ = 0;
+  let totalQ = 0, bestSum = 0, secsDone = 0;
   subject.sections.forEach((sec, sIdx) => {
     totalQ += sec.questions.length;
     const p = getSectionProgress(subjectIdx, sIdx);
-    if (p.total > 0) {
-      doneQ += Math.min(p.total, sec.questions.length);
-      correctQ += p.correct;
-    }
+    if (p) { bestSum += p.best; secsDone++; }
   });
-  return { total: totalQ, done: doneQ, correct: correctQ };
+  const avgBest = secsDone ? Math.round(bestSum / secsDone) : 0;
+  return { total: totalQ, secsDone, totalSecs: subject.sections.length, avgBest };
+}
+
+function fmtDate(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' });
+}
+
+function fmtPct(pct) {
+  return pct >= 90 ? '🏆' : pct >= 75 ? '👍' : pct >= 60 ? '📚' : '💪';
+}
+
+function scoreColor(pct) {
+  return pct >= 80 ? '#16a34a' : pct >= 60 ? '#d97706' : '#dc2626';
 }
 
 /* ===== ICONS ===== */
@@ -175,14 +223,15 @@ function renderHome() {
   screenContent.className = 'screen';
 
   // Stats
-  const totalAnswered = Object.values(State.progress).reduce((s, p) => s + p.total, 0);
-  const totalCorrect = Object.values(State.progress).reduce((s, p) => s + p.correct, 0);
-  const totalPct = totalAnswered ? Math.round(totalCorrect / totalAnswered * 100) : 0;
+  const streak = State.progress.streak;
+  const streakN = streak?.n || 0;
+  const allSecs = QUIZ_DATA.subjects.reduce((s, subj) => s + subj.sections.length, 0);
+  const doneSecs = Object.keys(State.progress.secs || {}).filter(k => !k.endsWith('_all')).length;
 
   const statsDiv = html(`<div class="total-stats" style="padding-top:16px">
     <div class="stat-card"><div class="stat-number">589</div><div class="stat-label">Питань всього</div></div>
-    <div class="stat-card"><div class="stat-number" style="color:#16a34a">${totalAnswered}</div><div class="stat-label">Відповіді</div></div>
-    <div class="stat-card"><div class="stat-number" style="color:${totalPct>=80?'#16a34a':totalPct>=60?'#d97706':'#dc2626'}">${totalPct}%</div><div class="stat-label">Результат</div></div>
+    <div class="stat-card"><div class="stat-number" style="color:#d97706">${streakN > 0 ? '🔥 ' + streakN : '—'}</div><div class="stat-label">Днів поспіль</div></div>
+    <div class="stat-card"><div class="stat-number" style="color:#16a34a">${doneSecs}/${allSecs}</div><div class="stat-label">Розділів</div></div>
   </div>`);
   screenContent.appendChild(statsDiv);
 
@@ -200,8 +249,7 @@ function renderHome() {
 
   QUIZ_DATA.subjects.forEach((subject, idx) => {
     const prog = getTotalProgress(idx);
-    const pct = prog.total ? Math.round(prog.done / prog.total * 100) : 0;
-    const correctPct = prog.done ? Math.round(prog.correct / prog.done * 100) : 0;
+    const pct = prog.totalSecs ? Math.round(prog.secsDone / prog.totalSecs * 100) : 0;
 
     const card = document.createElement('button');
     card.className = 'subject-card';
@@ -211,10 +259,10 @@ function renderHome() {
         <div class="card-icon-wrap" style="background:${subject.color}20">${subject.icon}</div>
         <div class="card-info">
           <div class="card-title">${subject.title}</div>
-          <div class="card-meta">${subject.sections.length} розділів · ${prog.total} питань${prog.done > 0 ? ` · ${correctPct}% правильно` : ''}</div>
+          <div class="card-meta">${subject.sections.length} розділів · ${prog.total} питань${prog.secsDone > 0 ? ` · ${prog.avgBest}% найкращий` : ''}</div>
           <div class="card-progress-wrap">
             ${progressBar(pct, subject.color).outerHTML}
-            <div class="progress-text"><span>${pct}% пройдено</span><span>${prog.done}/${prog.total}</span></div>
+            <div class="progress-text"><span>${pct}% розділів</span><span>${prog.secsDone}/${prog.totalSecs}</span></div>
           </div>
         </div>
         <div class="card-arrow">${Icons.chevronRight}</div>
@@ -233,7 +281,7 @@ function renderHome() {
 function renderSubject(subjectIdx) {
   const subject = QUIZ_DATA.subjects[subjectIdx];
   const prog = getTotalProgress(subjectIdx);
-  const pct = prog.total ? Math.round(prog.done / prog.total * 100) : 0;
+  const pct = prog.totalSecs ? Math.round(prog.secsDone / prog.totalSecs * 100) : 0;
 
   const screen = document.createElement('div');
   screen.id = 'screen-subject';
@@ -254,7 +302,7 @@ function renderSubject(subjectIdx) {
     <div class="subject-icon-large" style="background:${subject.color}20">${subject.icon}</div>
     <div class="subject-info">
       <div class="subject-name">${subject.title}</div>
-      <div class="subject-stats">${subject.sections.length} розділів · ${prog.total} питань · ${pct}% пройдено</div>
+      <div class="subject-stats">${subject.sections.length} розділів · ${prog.total} питань · ${pct}% розділів</div>
       <div class="subject-progress-bar">${progressBar(pct, subject.color).outerHTML}</div>
     </div>`;
   content.appendChild(subCard);
@@ -288,8 +336,6 @@ function renderSubject(subjectIdx) {
 
   subject.sections.forEach((section, sIdx) => {
     const sp = getSectionProgress(subjectIdx, sIdx);
-    const sPct = section.questions.length ? Math.round(Math.min(sp.total, section.questions.length) / section.questions.length * 100) : 0;
-    const sCorrectPct = sp.total ? Math.round(sp.correct / sp.total * 100) : 0;
 
     const cleanTitle = section.title
       .replace(/^Питання \d+[–\-]\d+ — /, '')
@@ -301,11 +347,11 @@ function renderSubject(subjectIdx) {
       <div class="section-num" style="background:${subject.color}">${sIdx + 1}</div>
       <div class="section-content">
         <div class="section-title">${cleanTitle}</div>
-        <div class="section-meta">${section.questions.length} питань${sp.total > 0 ? ` · ${sCorrectPct}% правильно` : ''}</div>
+        <div class="section-meta">${section.questions.length} питань${sp ? ` · ${fmtPct(sp.best)} ${sp.best}%${sp.n > 1 ? ` · ${sp.n} спроб` : ''}` : ''}</div>
       </div>
       <div class="section-progress-mini">
-        ${sp.total > 0 ? `<div class="section-score">${sPct}%</div>` : ''}
-        <div class="progress-bar-mini"><div class="progress-fill-mini" style="width:${sPct}%;background:${subject.color}"></div></div>
+        ${sp ? `<div class="section-score" style="color:${scoreColor(sp.best)}">${sp.best}%</div>` : ''}
+        <div class="progress-bar-mini"><div class="progress-fill-mini" style="width:${sp ? sp.best : 0}%;background:${subject.color}"></div></div>
       </div>
       <div class="section-chevron">${Icons.chevronRight}</div>
     </div>`;
