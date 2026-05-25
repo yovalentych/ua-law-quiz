@@ -16,6 +16,7 @@ const State = {
   studyFlatQuestions: [],
   studySectionFilter: null,
   studyAllExpanded: false,
+  isMistakesQuiz: false,
 };
 
 /* ===== PROGRESS — localStorage schema v2 =====
@@ -135,6 +136,12 @@ function shuffle(arr) {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+function shuffleOptions(q) {
+  const correctOpt = q.o[q.a];
+  const shuffled = shuffle([...q.o]);
+  return { ...q, o: shuffled, a: shuffled.indexOf(correctOpt) };
 }
 
 /* ===== RENDER HELPERS ===== */
@@ -444,6 +451,8 @@ function startQuiz(subjectIdx, sectionIdx, mode, randomize = false, limit = null
 
   if (questions.length === 0) return;
 
+  questions = questions.map(shuffleOptions);
+
   State.subjectIdx = subjectIdx;
   State.sectionIdx = sectionIdx;
   State.quizMode = mode;
@@ -452,6 +461,7 @@ function startQuiz(subjectIdx, sectionIdx, mode, randomize = false, limit = null
   State.answered = null;
   State.score = 0;
   State.mistakes = [];
+  State.isMistakesQuiz = false;
 
   renderQuiz();
 }
@@ -484,7 +494,9 @@ function renderQuiz() {
 
   screen.appendChild(makeHeader(
     `Питання ${State.qIdx + 1} з ${total}`,
-    `${subject.icon} ${subject.title.replace(/ЗУ "Про /, '').replace(/"$/, '')}`,
+    State.isMistakesQuiz
+      ? '🔴 Робота над помилками'
+      : `${subject.icon} ${subject.title.replace(/ЗУ "Про /, '').replace(/"$/, '')}`,
     false,
     actionsEl
   ));
@@ -581,7 +593,7 @@ function handleAnswer(i) {
   if (i === q.a) {
     State.score++;
   } else {
-    State.mistakes.push({ q: q.q, correct: q.o[q.a], chosen: q.o[i] });
+    State.mistakes.push({ question: q, correct: q.o[q.a], chosen: q.o[i] });
   }
   renderQuiz();
 }
@@ -592,15 +604,31 @@ function nextQuestion() {
     State.answered = null;
     renderQuiz();
   } else {
-    // Save progress
-    updateProgress(
-      State.subjectIdx,
-      State.sectionIdx,
-      State.score,
-      State.questions.length
-    );
+    if (!State.isMistakesQuiz) {
+      updateProgress(
+        State.subjectIdx,
+        State.sectionIdx,
+        State.score,
+        State.questions.length
+      );
+    }
     renderResults();
   }
+}
+
+/* ===== MISTAKES QUIZ ===== */
+function startMistakesQuiz(mistakes) {
+  const questions = mistakes.map(m => shuffleOptions(m.question));
+  if (questions.length === 0) return;
+
+  State.questions = questions;
+  State.qIdx = 0;
+  State.answered = null;
+  State.score = 0;
+  State.mistakes = [];
+  State.isMistakesQuiz = true;
+
+  renderQuiz();
 }
 
 /* ===== RESULTS SCREEN ===== */
@@ -648,15 +676,16 @@ function renderResults() {
     </div>`;
 
   // Mistakes
-  if (State.mistakes.length > 0) {
-    const mistakesLabel = html(`<div class="section-label" style="text-align:left;margin-bottom:10px">Помилки (${State.mistakes.length})</div>`);
+  const savedMistakes = [...State.mistakes];
+  if (savedMistakes.length > 0) {
+    const mistakesLabel = html(`<div class="section-label" style="text-align:left;margin-bottom:10px">Помилки (${savedMistakes.length})</div>`);
     rc.appendChild(mistakesLabel);
 
     const mistakesList = document.createElement('div');
     mistakesList.style.marginBottom = '20px';
-    State.mistakes.slice(0, 10).forEach(m => {
+    savedMistakes.slice(0, 10).forEach(m => {
       const item = html(`<div style="background:var(--card);border-radius:12px;padding:12px 14px;margin-bottom:8px;box-shadow:var(--shadow);text-align:left">
-        <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px;color:var(--text)">${m.q}</div>
+        <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px;color:var(--text)">${m.question.q}</div>
         <div style="font-size:0.78rem;color:var(--error-text);margin-bottom:3px">❌ ${m.chosen}</div>
         <div style="font-size:0.78rem;color:var(--success)">✅ ${m.correct}</div>
       </div>`);
@@ -668,6 +697,12 @@ function renderResults() {
   // Buttons
   const btns = document.createElement('div');
   btns.className = 'results-buttons';
+
+  if (savedMistakes.length > 0) {
+    const mistakesBtn = html(`<button class="result-btn action-btn" style="background:#dc2626;color:white">${Icons.flag} Робота над помилками (${savedMistakes.length})</button>`);
+    mistakesBtn.addEventListener('click', () => startMistakesQuiz(savedMistakes));
+    btns.appendChild(mistakesBtn);
+  }
 
   const retryBtn = html(`<button class="result-btn btn-primary action-btn">${Icons.refresh} Пройти ще раз</button>`);
   retryBtn.addEventListener('click', () => {
