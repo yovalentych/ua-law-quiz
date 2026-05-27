@@ -13,10 +13,16 @@ const State = {
   // study-mode extras
   studyViewMode: 'list',  // list | cards
   studyCardIdx: 0,
+  studyCardRevealed: false,
   studyFlatQuestions: [],
   studySectionFilter: null,
   studyAllExpanded: false,
   isMistakesQuiz: false,
+  answerResults: [],   // true=correct, false=wrong, undefined=not answered yet
+  // exam simulation
+  isExamMode: false,
+  examStartTime: null,
+  examDuration: 0,
 };
 
 /* ===== PROGRESS — localStorage schema v2 =====
@@ -86,14 +92,14 @@ function updateProgress(subjectIdx, sectionIdx, score, total) {
 
 function getTotalProgress(subjectIdx) {
   const subject = QUIZ_DATA.subjects[subjectIdx];
-  let totalQ = 0, bestSum = 0, secsDone = 0;
+  let totalQ = 0, bestSum = 0, secsDone = 0, passedSecs = 0;
   subject.sections.forEach((sec, sIdx) => {
     totalQ += sec.questions.length;
     const p = getSectionProgress(subjectIdx, sIdx);
-    if (p) { bestSum += p.best; secsDone++; }
+    if (p) { bestSum += p.best; secsDone++; if (p.best >= 80) passedSecs++; }
   });
   const avgBest = secsDone ? Math.round(bestSum / secsDone) : 0;
-  return { total: totalQ, secsDone, totalSecs: subject.sections.length, avgBest };
+  return { total: totalQ, secsDone, totalSecs: subject.sections.length, avgBest, passedSecs };
 }
 
 function fmtDate(ts) {
@@ -107,6 +113,205 @@ function fmtPct(pct) {
 
 function scoreColor(pct) {
   return pct >= 80 ? '#16a34a' : pct >= 60 ? '#d97706' : '#dc2626';
+}
+
+function sectionStatus(p) {
+  if (!p) return 'new';
+  if (p.best >= 90) return 'top';
+  if (p.best >= 80) return 'good';
+  if (p.best >= 60) return 'mid';
+  return 'low';
+}
+
+const STATUS_META = {
+  new:  { color: '#94a3b8', icon: '○', label: 'Не пройдено' },
+  low:  { color: '#dc2626', icon: '✕', label: 'Потрібна практика' },
+  mid:  { color: '#d97706', icon: '◑', label: 'Майже' },
+  good: { color: '#16a34a', icon: '✓', label: 'Пройдено' },
+  top:  { color: '#0057B7', icon: '★', label: 'Відмінно' },
+};
+
+function findNextSection() {
+  for (let si = 0; si < QUIZ_DATA.subjects.length; si++) {
+    for (let secI = 0; secI < QUIZ_DATA.subjects[si].sections.length; secI++) {
+      const p = getSectionProgress(si, secI);
+      if (!p || p.best < 80) return { subjectIdx: si, sectionIdx: secI };
+    }
+  }
+  return null;
+}
+
+function getOverallAccuracy() {
+  const hist = State.progress.hist || [];
+  if (!hist.length) return null;
+  const totalT = hist.reduce((s, h) => s + h.t, 0);
+  const totalS = hist.reduce((s, h) => s + h.s, 0);
+  return totalT ? Math.round(totalS / totalT * 100) : null;
+}
+
+function detachQuizKeys() {
+  if (_quizKeyHandler) { document.removeEventListener('keydown', _quizKeyHandler); _quizKeyHandler = null; }
+  if (_examTimerInterval) { clearInterval(_examTimerInterval); _examTimerInterval = null; }
+}
+
+function getExamGrade(score) {
+  return {
+    'А': score >= 36 ? 2 : score >= 28 ? 1 : 0,
+    'Б': score >= 34 ? 2 : score >= 26 ? 1 : 0,
+    'В': score >= 32 ? 2 : score >= 24 ? 1 : 0,
+  };
+}
+
+function fmtDuration(secs) {
+  const m = Math.floor(secs / 60), s = secs % 60;
+  return `${m} хв ${s.toString().padStart(2, '0')} с`;
+}
+
+function startExam() {
+  let all = [];
+  QUIZ_DATA.subjects.forEach((subj, si) => {
+    subj.sections.forEach((sec, secI) => {
+      sec.questions.forEach((q, qIdx) => all.push({ ...q, subjectIdx: si, sectionIdx: secI, qIdx }));
+    });
+  });
+  const questions = shuffle(all).slice(0, 40).map(shuffleOptions);
+  detachQuizKeys();
+  State.isExamMode = true;
+  State.examStartTime = Date.now();
+  State.examDuration = 0;
+  State.subjectIdx = 0;
+  State.sectionIdx = null;
+  State.quizMode = 'exam';
+  State.questions = questions;
+  State.qIdx = 0;
+  State.answered = null;
+  State.score = 0;
+  State.mistakes = [];
+  State.isMistakesQuiz = false;
+  State.answerResults = [];
+  renderQuiz();
+}
+
+function finishExam() {
+  State.examDuration = Math.floor((Date.now() - State.examStartTime) / 1000);
+  detachQuizKeys();
+  renderExamResults();
+}
+
+function renderExamResults() {
+  detachQuizKeys();
+  const score = State.score;
+  const total = State.questions.length;
+  const pct = Math.round(score / total * 100);
+  const duration = State.examDuration;
+  const grades = getExamGrade(score);
+  const savedMistakes = [...State.mistakes];
+
+  const screen = document.createElement('div');
+  screen.id = 'screen-results';
+  screen.style.cssText = 'display:flex;flex-direction:column';
+
+  screen.appendChild(makeHeader('Результати іспиту', '🎓 Симуляція офіційного іспиту', false));
+
+  const scrollArea = document.createElement('div');
+  scrollArea.className = 'screen';
+  const rc = document.createElement('div');
+  rc.className = 'results-content';
+
+  const passAny = Object.values(grades).some(g => g >= 1);
+  const heroColor = passAny ? '#16a34a' : '#dc2626';
+  const heroBg = passAny ? '#dcfce7' : '#fee2e2';
+  const heroBorder = passAny ? '#86efac' : '#fca5a5';
+  const heroLabel = passAny ? '✅ Іспит складено' : '❌ Іспит не складено';
+  const timeLimit = duration >= 2400 ? ' (час вийшов)' : '';
+
+  const hero = html(`<div class="exam-hero" style="background:${heroBg};border:2px solid ${heroBorder}">
+    <div class="exam-score" style="color:${heroColor}">${score}<span class="exam-score-total">/ ${total}</span></div>
+    <div class="exam-pct" style="color:${heroColor}">${pct}%</div>
+    <div class="exam-result-label" style="background:${heroColor}">${heroLabel}</div>
+    <div class="exam-duration">⏱ Тривалість: ${fmtDuration(Math.min(duration, 2400))}${timeLimit}</div>
+  </div>`);
+  rc.appendChild(hero);
+
+  const catMeta = {
+    'А': { min1: 28, min2: 36, desc: 'Категорія А' },
+    'Б': { min1: 26, min2: 34, desc: 'Категорія Б' },
+    'В': { min1: 24, min2: 32, desc: 'Категорія В' },
+  };
+
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'exam-grades-wrap';
+
+  const tableLbl = html(`<div class="section-label" style="text-align:left;margin-bottom:12px">Результат за категоріями</div>`);
+  tableWrap.appendChild(tableLbl);
+
+  const table = document.createElement('div');
+  table.className = 'exam-grades-table';
+
+  const hdr = html(`<div class="exam-grade-header">
+    <span>Кат.</span><span>Правильних</span><span>Балів</span><span>Статус</span>
+  </div>`);
+  table.appendChild(hdr);
+
+  Object.entries(grades).forEach(([cat, pts]) => {
+    const color = pts === 2 ? '#16a34a' : pts === 1 ? '#0284c7' : '#dc2626';
+    const statusIcon = pts === 2 ? '★' : pts === 1 ? '✓' : '✗';
+    const statusText = pts === 2 ? 'Відмінно' : pts === 1 ? 'Зараховано' : 'Не зараховано';
+    const row = html(`<div class="exam-grade-row ${pts >= 1 ? 'grade-pass' : 'grade-fail'}">
+      <span class="grade-cat" style="color:${color}">${cat}</span>
+      <span class="grade-score">${score} / ${total}</span>
+      <span class="grade-pts" style="color:${color}">${pts}</span>
+      <span class="grade-status" style="color:${color}">${statusIcon} ${statusText}</span>
+    </div>`);
+    table.appendChild(row);
+  });
+
+  tableWrap.appendChild(table);
+  const note = html(`<div class="exam-grade-note">Критерії прийому: А ≥28 (1 б.) / ≥36 (2 б.),&nbsp; Б ≥26 / ≥34,&nbsp; В ≥24 / ≥32</div>`);
+  tableWrap.appendChild(note);
+  rc.appendChild(tableWrap);
+
+  if (savedMistakes.length > 0) {
+    const ml = html(`<div class="section-label" style="text-align:left;margin-bottom:10px;margin-top:8px">Помилки (${savedMistakes.length})</div>`);
+    rc.appendChild(ml);
+    const mistakesList = document.createElement('div');
+    mistakesList.style.marginBottom = '20px';
+    savedMistakes.slice(0, 8).forEach(m => {
+      const item = html(`<div style="background:var(--card);border-radius:12px;padding:12px 14px;margin-bottom:8px;box-shadow:var(--shadow);text-align:left;border-left:3px solid #dc2626">
+        <div style="font-size:0.83rem;font-weight:600;margin-bottom:6px;color:var(--text)">${m.question.q}</div>
+        <div style="font-size:0.78rem;color:var(--error-text);margin-bottom:3px">❌ ${m.chosen}</div>
+        <div style="font-size:0.78rem;color:var(--success)">✅ ${m.correct}</div>
+      </div>`);
+      mistakesList.appendChild(item);
+    });
+    if (savedMistakes.length > 8) {
+      mistakesList.appendChild(html(`<div style="text-align:center;font-size:0.8rem;color:var(--text-muted);padding:8px">… ще ${savedMistakes.length - 8} помилок</div>`));
+    }
+    rc.appendChild(mistakesList);
+  }
+
+  const btns = document.createElement('div');
+  btns.className = 'results-buttons';
+
+  if (savedMistakes.length > 0) {
+    const mistakesBtn = html(`<button class="result-btn action-btn" style="background:#dc2626;color:white">${Icons.flag} Робота над помилками (${savedMistakes.length})</button>`);
+    mistakesBtn.addEventListener('click', () => startMistakesQuiz(savedMistakes));
+    btns.appendChild(mistakesBtn);
+  }
+
+  const retryBtn = html(`<button class="result-btn btn-primary action-btn">🎓 Пройти іспит знову</button>`);
+  retryBtn.addEventListener('click', startExam);
+
+  const homeBtn = html(`<button class="result-btn action-btn" style="background:#f1f5f9;color:#1e293b">${Icons.home} На головну</button>`);
+  homeBtn.addEventListener('click', () => { State.isExamMode = false; State.screen = 'home'; renderHome(); });
+
+  btns.appendChild(retryBtn);
+  btns.appendChild(homeBtn);
+  rc.appendChild(btns);
+
+  scrollArea.appendChild(rc);
+  screen.appendChild(scrollArea);
+  render(screen);
 }
 
 /* ===== ICONS ===== */
@@ -128,6 +333,8 @@ const Icons = {
 };
 
 const LETTERS = ['А', 'Б', 'В', 'Г'];
+let _quizKeyHandler = null;
+let _examTimerInterval = null;
 
 function shuffle(arr) {
   const a = [...arr];
@@ -208,6 +415,8 @@ function makeHeader(title, subtitle, showBack, actions) {
 
 /* ===== HOME SCREEN ===== */
 function renderHome() {
+  detachQuizKeys();
+  State.isExamMode = false;
   const screen = document.createElement('div');
   screen.id = 'screen-home';
   screen.style.display = 'flex';
@@ -233,17 +442,51 @@ function renderHome() {
   const streak = State.progress.streak;
   const streakN = streak?.n || 0;
   const allSecs = QUIZ_DATA.subjects.reduce((s, subj) => s + subj.sections.length, 0);
-  const doneSecs = Object.keys(State.progress.secs || {}).filter(k => !k.endsWith('_all')).length;
+  const passedCount = QUIZ_DATA.subjects.reduce((total, subj, si) =>
+    total + subj.sections.filter((_, secI) => { const p = getSectionProgress(si, secI); return p && p.best >= 80; }).length, 0);
+  const accuracy = getOverallAccuracy();
 
   const statsDiv = html(`<div class="total-stats" style="padding-top:16px">
-    <div class="stat-card"><div class="stat-number">589</div><div class="stat-label">Питань всього</div></div>
-    <div class="stat-card"><div class="stat-number" style="color:#d97706">${streakN > 0 ? '🔥 ' + streakN : '—'}</div><div class="stat-label">Днів поспіль</div></div>
-    <div class="stat-card"><div class="stat-number" style="color:#16a34a">${doneSecs}/${allSecs}</div><div class="stat-label">Розділів</div></div>
+    <div class="stat-card"><div class="stat-number" style="color:var(--ua-blue)">589</div><div class="stat-label">Питань всього</div></div>
+    <div class="stat-card"><div class="stat-number" style="color:${accuracy !== null ? '#16a34a' : 'var(--text-muted)'}">${accuracy !== null ? accuracy + '%' : '—'}</div><div class="stat-label">Точність</div></div>
+    <div class="stat-card"><div class="stat-number" style="color:${passedCount > 0 ? '#16a34a' : 'var(--text-muted)'}">${passedCount}/${allSecs}</div><div class="stat-label">Пройдено</div></div>
   </div>`);
   screenContent.appendChild(statsDiv);
 
   const content = document.createElement('div');
   content.className = 'content';
+
+  // Continue card
+  const next = findNextSection();
+  const hasHistory = (State.progress.hist || []).length > 0;
+  if (next !== null) {
+    const nextSubj = QUIZ_DATA.subjects[next.subjectIdx];
+    const nextSec = nextSubj.sections[next.sectionIdx];
+    const continueCard = document.createElement('div');
+    continueCard.className = 'continue-card';
+    continueCard.innerHTML = `
+      <div class="continue-label">${streakN > 0 ? '🔥 ' + streakN + ' днів · ' : ''}${hasHistory ? 'Продовжити' : 'Почати навчання'}</div>
+      <div class="continue-section">${nextSubj.icon} ${nextSubj.title} — ${nextSec.title}</div>
+      <div class="continue-actions">
+        <button class="continue-btn-primary">▶ Тест</button>
+        <button class="continue-btn-secondary">📖 Вчити</button>
+      </div>`;
+    continueCard.querySelector('.continue-btn-primary').addEventListener('click', () => startQuiz(next.subjectIdx, next.sectionIdx, 'quiz'));
+    continueCard.querySelector('.continue-btn-secondary').addEventListener('click', () => startStudy(next.subjectIdx, next.sectionIdx));
+    content.appendChild(continueCard);
+  }
+
+  // Exam promo card
+  const examCard = html(`<div class="exam-promo-card">
+    <div class="exam-promo-icon">🎓</div>
+    <div class="exam-promo-info">
+      <div class="exam-promo-title">Симуляція іспиту</div>
+      <div class="exam-promo-desc">40 питань · 40 хвилин · Офіційні критерії КМУ</div>
+    </div>
+    <button class="exam-promo-btn">Старт</button>
+  </div>`);
+  examCard.querySelector('.exam-promo-btn').addEventListener('click', startExam);
+  content.appendChild(examCard);
 
   const lbl = document.createElement('div');
   lbl.className = 'section-label';
@@ -256,7 +499,7 @@ function renderHome() {
 
   QUIZ_DATA.subjects.forEach((subject, idx) => {
     const prog = getTotalProgress(idx);
-    const pct = prog.totalSecs ? Math.round(prog.secsDone / prog.totalSecs * 100) : 0;
+    const passedPct = prog.totalSecs ? Math.round(prog.passedSecs / prog.totalSecs * 100) : 0;
 
     const card = document.createElement('button');
     card.className = 'subject-card';
@@ -266,10 +509,10 @@ function renderHome() {
         <div class="card-icon-wrap" style="background:${subject.color}20">${subject.icon}</div>
         <div class="card-info">
           <div class="card-title">${subject.title}</div>
-          <div class="card-meta">${subject.sections.length} розділів · ${prog.total} питань${prog.secsDone > 0 ? ` · ${prog.avgBest}% найкращий` : ''}</div>
+          <div class="card-meta">${prog.passedSecs}/${prog.totalSecs} пройдено · ${prog.total} питань${prog.avgBest > 0 ? ` · ${prog.avgBest}% середнє` : ''}</div>
           <div class="card-progress-wrap">
-            ${progressBar(pct, subject.color).outerHTML}
-            <div class="progress-text"><span>${pct}% розділів</span><span>${prog.secsDone}/${prog.totalSecs}</span></div>
+            ${progressBar(passedPct, subject.color).outerHTML}
+            <div class="progress-text"><span>${passedPct}% пройдено</span><span>${prog.passedSecs}/${prog.totalSecs}</span></div>
           </div>
         </div>
         <div class="card-arrow">${Icons.chevronRight}</div>
@@ -286,16 +529,17 @@ function renderHome() {
 
 /* ===== SUBJECT SCREEN ===== */
 function renderSubject(subjectIdx) {
+  detachQuizKeys();
   const subject = QUIZ_DATA.subjects[subjectIdx];
   const prog = getTotalProgress(subjectIdx);
-  const pct = prog.totalSecs ? Math.round(prog.secsDone / prog.totalSecs * 100) : 0;
+  const passedPct = prog.totalSecs ? Math.round(prog.passedSecs / prog.totalSecs * 100) : 0;
 
   const screen = document.createElement('div');
   screen.id = 'screen-subject';
   screen.style.display = 'flex';
   screen.style.flexDirection = 'column';
 
-  screen.appendChild(makeHeader(subject.title, `${prog.total} питань`, true));
+  screen.appendChild(makeHeader(subject.title, `${prog.passedSecs}/${prog.totalSecs} пройдено`, true));
 
   const screenContent = document.createElement('div');
   screenContent.className = 'screen';
@@ -309,8 +553,8 @@ function renderSubject(subjectIdx) {
     <div class="subject-icon-large" style="background:${subject.color}20">${subject.icon}</div>
     <div class="subject-info">
       <div class="subject-name">${subject.title}</div>
-      <div class="subject-stats">${subject.sections.length} розділів · ${prog.total} питань · ${pct}% розділів</div>
-      <div class="subject-progress-bar">${progressBar(pct, subject.color).outerHTML}</div>
+      <div class="subject-stats">${prog.passedSecs}/${prog.totalSecs} пройдено · ${prog.total} питань${prog.avgBest > 0 ? ` · середнє ${prog.avgBest}%` : ''}</div>
+      <div class="subject-progress-bar">${progressBar(passedPct, subject.color).outerHTML}</div>
     </div>`;
   content.appendChild(subCard);
 
@@ -343,22 +587,25 @@ function renderSubject(subjectIdx) {
 
   subject.sections.forEach((section, sIdx) => {
     const sp = getSectionProgress(subjectIdx, sIdx);
+    const status = sectionStatus(sp);
+    const sm = STATUS_META[status];
 
     const cleanTitle = section.title
       .replace(/^Питання \d+[–\-]\d+ — /, '')
       .replace(/\s*\(\d+[–\-]\d+\)\s*$/, '');
+    const displayTitle = cleanTitle || section.title;
 
     const item = document.createElement('button');
     item.className = 'section-item';
     item.innerHTML = `<div class="section-item-inner">
-      <div class="section-num" style="background:${subject.color}">${sIdx + 1}</div>
+      <div class="section-num" style="background:${sm.color}">${sIdx + 1}</div>
       <div class="section-content">
-        <div class="section-title">${cleanTitle}</div>
-        <div class="section-meta">${section.questions.length} питань${sp ? ` · ${fmtPct(sp.best)} ${sp.best}%${sp.n > 1 ? ` · ${sp.n} спроб` : ''}` : ''}</div>
+        <div class="section-title">${displayTitle}</div>
+        <div class="section-meta">${section.questions.length} питань${sp ? ` · ${fmtPct(sp.best)} ${sp.best}%${sp.n > 1 ? ` · ${sp.n} спроб` : ''}` : ` · ${sm.label}`}</div>
       </div>
       <div class="section-progress-mini">
-        ${sp ? `<div class="section-score" style="color:${scoreColor(sp.best)}">${sp.best}%</div>` : ''}
-        <div class="progress-bar-mini"><div class="progress-fill-mini" style="width:${sp ? sp.best : 0}%;background:${subject.color}"></div></div>
+        <div class="section-score" style="color:${sm.color}">${sp ? sp.best + '%' : sm.icon}</div>
+        <div class="progress-bar-mini"><div class="progress-fill-mini" style="width:${sp ? sp.best : 0}%;background:${sm.color}"></div></div>
       </div>
       <div class="section-chevron">${Icons.chevronRight}</div>
     </div>`;
@@ -462,8 +709,48 @@ function startQuiz(subjectIdx, sectionIdx, mode, randomize = false, limit = null
   State.score = 0;
   State.mistakes = [];
   State.isMistakesQuiz = false;
+  State.answerResults = [];
 
   renderQuiz();
+}
+
+/* ===== SEGMENTED PROGRESS BAR ===== */
+function buildSegmentedBar(questions, answerResults, currentIdx) {
+  // Group consecutive questions that share the same section
+  const groups = [];
+  let curGroup = null;
+  questions.forEach((q, i) => {
+    const key = `${q.subjectIdx}_${q.sectionIdx}`;
+    if (!curGroup || curGroup.key !== key) {
+      curGroup = { key, startIdx: i, count: 0 };
+      groups.push(curGroup);
+    }
+    curGroup.count++;
+  });
+
+  const bar = document.createElement('div');
+  bar.className = 'quiz-seg-bar';
+
+  groups.forEach(group => {
+    const groupEl = document.createElement('div');
+    groupEl.className = 'quiz-seg-group';
+    groupEl.style.flex = group.count;
+
+    for (let i = 0; i < group.count; i++) {
+      const absIdx = group.startIdx + i;
+      const result = answerResults[absIdx];
+      const seg = document.createElement('div');
+      seg.className = 'quiz-seg';
+      if (result === true) seg.classList.add('seg-correct');
+      else if (result === false) seg.classList.add('seg-wrong');
+      else if (absIdx === currentIdx) seg.classList.add('seg-current');
+      groupEl.appendChild(seg);
+    }
+
+    bar.appendChild(groupEl);
+  });
+
+  return bar;
 }
 
 /* ===== QUIZ SCREEN ===== */
@@ -492,25 +779,37 @@ function renderQuiz() {
   });
   actionsEl.appendChild(closeBtn);
 
+  let headerSubtitle;
+  if (State.isMistakesQuiz) {
+    headerSubtitle = '🔴 Робота над помилками';
+  } else if (State.isExamMode) {
+    const examElapsed = Math.floor((Date.now() - State.examStartTime) / 1000);
+    const examRemaining = Math.max(0, 2400 - examElapsed);
+    const em = Math.floor(examRemaining / 60), es = examRemaining % 60;
+    headerSubtitle = `🎓 Іспит &nbsp;⏱ <span id="exam-timer-display" style="font-variant-numeric:tabular-nums;font-weight:700">${em}:${es.toString().padStart(2, '0')}</span>`;
+  } else {
+    headerSubtitle = `${subject.icon} ${subject.title.replace(/ЗУ "Про /, '').replace(/"$/, '')}`;
+  }
+
   screen.appendChild(makeHeader(
     `Питання ${State.qIdx + 1} з ${total}`,
-    State.isMistakesQuiz
-      ? '🔴 Робота над помилками'
-      : `${subject.icon} ${subject.title.replace(/ЗУ "Про /, '').replace(/"$/, '')}`,
+    headerSubtitle,
     false,
     actionsEl
   ));
 
   // Progress bar header
-  const progHeader = html(`<div class="quiz-progress-header">
-    <div class="quiz-progress-header-inner">
-      <div class="quiz-counter">
-        <span class="quiz-counter-left">${State.qIdx + 1} / ${total}</span>
-        <span class="quiz-counter-right">✅ ${State.score} правильно</span>
-      </div>
-      <div class="quiz-bar"><div class="quiz-bar-fill" style="width:${pct}%"></div></div>
-    </div>
-  </div>`);
+  const progHeader = document.createElement('div');
+  progHeader.className = 'quiz-progress-header';
+  const progInner = document.createElement('div');
+  progInner.className = 'quiz-progress-header-inner';
+  const wrongCount = State.mistakes.length;
+  progInner.appendChild(html(`<div class="quiz-counter">
+    <span class="quiz-counter-left">${State.qIdx + 1} / ${total}</span>
+    <span class="quiz-counter-right">${State.score > 0 ? `<span style="color:#16a34a">✅ ${State.score}</span>` : ''}${wrongCount > 0 ? `${State.score > 0 ? ' ' : ''}<span style="color:#dc2626">❌ ${wrongCount}</span>` : ''}${State.score === 0 && wrongCount === 0 ? '—' : ''}</span>
+  </div>`));
+  progInner.appendChild(buildSegmentedBar(State.questions, State.answerResults, State.qIdx));
+  progHeader.appendChild(progInner);
   screen.appendChild(progHeader);
 
   const scrollArea = document.createElement('div');
@@ -582,7 +881,33 @@ function renderQuiz() {
   nav.appendChild(navInner);
   screen.appendChild(nav);
 
+  if (_quizKeyHandler) document.removeEventListener('keydown', _quizKeyHandler);
+  _quizKeyHandler = (e) => {
+    if (State.answered !== null) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nextQuestion(); }
+    } else {
+      const idx = { '1': 0, '2': 1, '3': 2, '4': 3 }[e.key];
+      if (idx !== undefined) handleAnswer(idx);
+    }
+  };
+  document.addEventListener('keydown', _quizKeyHandler);
+
   render(screen);
+
+  if (State.isExamMode) {
+    if (_examTimerInterval) clearInterval(_examTimerInterval);
+    _examTimerInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - State.examStartTime) / 1000);
+      const remaining = Math.max(0, 2400 - elapsed);
+      const timerEl = document.getElementById('exam-timer-display');
+      if (!timerEl) { clearInterval(_examTimerInterval); _examTimerInterval = null; return; }
+      const m = Math.floor(remaining / 60), s = remaining % 60;
+      timerEl.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+      timerEl.style.color = remaining < 300 ? '#ff4444' : '';
+      timerEl.style.fontWeight = remaining < 300 ? '800' : '700';
+      if (remaining === 0) { clearInterval(_examTimerInterval); _examTimerInterval = null; finishExam(); }
+    }, 1000);
+  }
 }
 
 function handleAnswer(i) {
@@ -590,7 +915,9 @@ function handleAnswer(i) {
   if (State.answered !== null) return;
 
   State.answered = i;
-  if (i === q.a) {
+  const isCorrect = i === q.a;
+  State.answerResults[State.qIdx] = isCorrect;
+  if (isCorrect) {
     State.score++;
   } else {
     State.mistakes.push({ question: q, correct: q.o[q.a], chosen: q.o[i] });
@@ -604,15 +931,19 @@ function nextQuestion() {
     State.answered = null;
     renderQuiz();
   } else {
-    if (!State.isMistakesQuiz) {
-      updateProgress(
-        State.subjectIdx,
-        State.sectionIdx,
-        State.score,
-        State.questions.length
-      );
+    if (State.isExamMode) {
+      finishExam();
+    } else {
+      if (!State.isMistakesQuiz) {
+        updateProgress(
+          State.subjectIdx,
+          State.sectionIdx,
+          State.score,
+          State.questions.length
+        );
+      }
+      renderResults();
     }
-    renderResults();
   }
 }
 
@@ -627,12 +958,15 @@ function startMistakesQuiz(mistakes) {
   State.score = 0;
   State.mistakes = [];
   State.isMistakesQuiz = true;
+  State.isExamMode = false;
+  State.answerResults = [];
 
   renderQuiz();
 }
 
 /* ===== RESULTS SCREEN ===== */
 function renderResults() {
+  detachQuizKeys();
   const total = State.questions.length;
   const score = State.score;
   const pct = Math.round((score / total) * 100);
@@ -741,6 +1075,7 @@ function startStudy(subjectIdx, sectionIdx) {
   State.subjectIdx = subjectIdx;
   State.sectionIdx = sectionIdx;
   State.studyCardIdx = 0;
+  State.studyCardRevealed = false;
   State.studySectionFilter = sectionIdx;
   State.studyAllExpanded = false;
   buildStudyFlat(subjectIdx, sectionIdx);
@@ -873,96 +1208,113 @@ function renderStudyCardView(screen, subject, flat) {
   const idx = Math.max(0, Math.min(State.studyCardIdx, flat.length - 1));
   State.studyCardIdx = idx;
   const q = flat[idx];
-  const pct = Math.round((idx / flat.length) * 100);
+  const pct = Math.round(((idx + 1) / flat.length) * 100);
+  const revealed = State.studyCardRevealed;
 
-  // Progress bar
-  const progBar = html(`<div style="background:var(--card);border-bottom:1px solid var(--border);padding:10px 16px">
-    <div style="max-width:700px;margin:0 auto">
-      <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-muted);margin-bottom:6px">
-        <span>${q.sectionTitle}</span>
-        <span>${idx + 1} / ${flat.length}</span>
-      </div>
-      <div style="height:5px;background:var(--border);border-radius:3px;overflow:hidden">
-        <div style="height:100%;width:${pct}%;background:${subject.color};border-radius:3px;transition:width 0.3s"></div>
-      </div>
-    </div>
+  function goTo(newIdx) {
+    State.studyCardIdx = newIdx;
+    State.studyCardRevealed = false;
+    renderStudy();
+  }
+
+  // Thin progress bar
+  const progBar = html(`<div class="fc-progress-bar">
+    <div class="fc-progress-fill" style="width:${pct}%;background:${subject.color}"></div>
   </div>`);
   screen.appendChild(progBar);
 
   const scrollArea = document.createElement('div');
   scrollArea.className = 'screen';
 
-  const cardWrap = html(`<div style="padding:16px;max-width:700px;margin:0 auto;padding-bottom:90px"></div>`);
+  const wrap = html(`<div class="fc-wrap"></div>`);
+
+  // Counter chip
+  const counter = html(`<div class="fc-counter">
+    <span class="fc-counter-tag" style="background:${subject.color}20;color:${subject.color}">${q.sectionTitle}</span>
+    <span class="fc-counter-num">${idx + 1} / ${flat.length}</span>
+  </div>`);
+  wrap.appendChild(counter);
 
   // Question card
-  const qCard = html(`<div style="background:var(--card);border-radius:16px;padding:20px;margin-bottom:14px;box-shadow:var(--shadow)">
-    <div style="display:inline-block;font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:3px 10px;border-radius:20px;color:white;background:${subject.color};margin-bottom:12px">${q.sectionTitle}</div>
-    <div style="font-size:1.05rem;font-weight:600;line-height:1.5;color:var(--text)">${q.q}</div>
+  const card = html(`<div class="fc-card">
+    <p class="fc-question">${q.q}</p>
   </div>`);
-  cardWrap.appendChild(qCard);
+  wrap.appendChild(card);
 
-  // Options — all shown, correct highlighted
-  const optList = document.createElement('div');
-  optList.style.cssText = 'display:flex;flex-direction:column;gap:10px;margin-bottom:14px';
+  // Answer section
+  const answerWrap = document.createElement('div');
+  answerWrap.className = 'fc-answers' + (revealed ? ' fc-answers-visible' : '');
+
   q.o.forEach((opt, i) => {
     const isCorrect = i === q.a;
-    const optEl = html(`<div style="padding:14px 16px;border-radius:10px;display:flex;align-items:flex-start;gap:12px;font-size:0.95rem;line-height:1.4;
-      ${isCorrect
-        ? 'background:var(--success-bg);border:2px solid var(--success);color:var(--success-text)'
-        : 'background:var(--card);border:2px solid var(--border);color:var(--text-muted)'}">
-      <span style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;flex-shrink:0;
-        ${isCorrect ? 'background:var(--success);color:white;border:2px solid var(--success)' : 'background:var(--bg);border:2px solid var(--border);color:var(--text-muted)'}">${LETTERS[i]}</span>
-      <span style="flex:1">${opt}</span>
-      ${isCorrect ? '<span style="font-size:1rem;flex-shrink:0">✅</span>' : ''}
+    const item = html(`<div class="fc-option ${isCorrect ? 'fc-option-correct' : 'fc-option-other'}">
+      <span class="fc-opt-letter ${isCorrect ? 'fc-opt-letter-correct' : ''}">${LETTERS[i]}</span>
+      <span class="fc-opt-text">${opt}</span>
+      ${isCorrect ? '<span class="fc-opt-check">✅</span>' : ''}
     </div>`);
-    optList.appendChild(optEl);
+    answerWrap.appendChild(item);
   });
-  cardWrap.appendChild(optList);
+  wrap.appendChild(answerWrap);
 
-  scrollArea.appendChild(cardWrap);
+  // Reveal / Next button
+  if (!revealed) {
+    const revealBtn = html(`<button class="fc-reveal-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+      Показати відповідь
+    </button>`);
+    revealBtn.addEventListener('click', () => {
+      State.studyCardRevealed = true;
+      renderStudy();
+    });
+    wrap.appendChild(revealBtn);
+  }
+
+  scrollArea.appendChild(wrap);
   screen.appendChild(scrollArea);
 
-  // Fixed bottom nav
-  const nav = html(`<div style="position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);padding:12px 16px;padding-bottom:max(12px,env(safe-area-inset-bottom));z-index:20">
-    <div style="max-width:700px;margin:0 auto;display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center">
-      <button id="btn-prev" style="padding:14px;border-radius:10px;font-size:0.95rem;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;transition:all 0.2s;
-        ${idx === 0 ? 'background:var(--border);color:var(--text-muted);cursor:default' : 'background:var(--bg);color:var(--text);border:2px solid var(--border)'}">
+  // Compact bottom nav
+  const nav = html(`<div class="fc-nav">
+    <div class="fc-nav-inner">
+      <button class="fc-nav-btn ${idx === 0 ? 'fc-nav-btn-disabled' : 'fc-nav-btn-secondary'}" id="btn-prev">
         ${Icons.back} Назад
       </button>
-      <span style="font-size:0.8rem;color:var(--text-muted);text-align:center;white-space:nowrap">${idx + 1} / ${flat.length}</span>
-      <button id="btn-next" style="padding:14px;border-radius:10px;font-size:0.95rem;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;transition:all 0.2s;
-        ${idx === flat.length - 1 ? 'background:var(--border);color:var(--text-muted);cursor:default' : 'background:var(--ua-blue);color:white'}">
+      <div class="fc-nav-dots">
+        ${Array.from({length: Math.min(flat.length, 7)}, (_, i) => {
+          const dotIdx = flat.length <= 7 ? i : Math.round(i * (flat.length - 1) / 6);
+          const active = Math.abs(dotIdx - idx) < (flat.length <= 7 ? 0.5 : flat.length / 14);
+          return `<div class="fc-dot ${i === Math.round(idx / (flat.length - 1) * 6) ? 'fc-dot-active' : ''}"></div>`;
+        }).join('')}
+      </div>
+      <button class="fc-nav-btn ${idx === flat.length - 1 ? 'fc-nav-btn-disabled' : 'fc-nav-btn-primary'}" id="btn-next">
         Далі ${Icons.chevronRight}
       </button>
     </div>
   </div>`);
 
-  nav.querySelector('#btn-prev').addEventListener('click', () => {
-    if (idx > 0) { State.studyCardIdx = idx - 1; renderStudy(); }
-  });
-  nav.querySelector('#btn-next').addEventListener('click', () => {
-    if (idx < flat.length - 1) { State.studyCardIdx = idx + 1; renderStudy(); }
-  });
+  nav.querySelector('#btn-prev').addEventListener('click', () => { if (idx > 0) goTo(idx - 1); });
+  nav.querySelector('#btn-next').addEventListener('click', () => { if (idx < flat.length - 1) goTo(idx + 1); });
   screen.appendChild(nav);
 
-  // Keyboard navigation
+  // Keyboard
   function onKeydown(e) {
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-      if (idx > 0) { State.studyCardIdx = idx - 1; document.removeEventListener('keydown', onKeydown); renderStudy(); }
-    } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') {
-      if (idx < flat.length - 1) { State.studyCardIdx = idx + 1; document.removeEventListener('keydown', onKeydown); renderStudy(); }
+    if (e.key === 'ArrowLeft') { if (idx > 0) { document.removeEventListener('keydown', onKeydown); goTo(idx - 1); } }
+    else if (e.key === 'ArrowRight') { if (idx < flat.length - 1) { document.removeEventListener('keydown', onKeydown); goTo(idx + 1); } }
+    else if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      if (!State.studyCardRevealed) { State.studyCardRevealed = true; document.removeEventListener('keydown', onKeydown); renderStudy(); }
+      else if (idx < flat.length - 1) { document.removeEventListener('keydown', onKeydown); goTo(idx + 1); }
     }
   }
   document.addEventListener('keydown', onKeydown);
 
-  // Swipe gestures
+  // Swipe
   let touchStartX = 0;
   scrollArea.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; }, { passive: true });
   scrollArea.addEventListener('touchend', e => {
     const dx = e.changedTouches[0].clientX - touchStartX;
     if (Math.abs(dx) < 50) return;
-    if (dx < 0 && idx < flat.length - 1) { State.studyCardIdx = idx + 1; renderStudy(); }
-    else if (dx > 0 && idx > 0) { State.studyCardIdx = idx - 1; renderStudy(); }
+    if (dx < 0 && idx < flat.length - 1) goTo(idx + 1);
+    else if (dx > 0 && idx > 0) goTo(idx - 1);
   }, { passive: true });
 }
 
